@@ -23,6 +23,12 @@ type Habit struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+type Stats struct {
+	CurrentStreak int `json:"current_streak"`
+	BestStreak    int `json:"best_streak"`
+	TotalDays     int `json:"total_days"`
+}
+
 type HabitRepository struct {
 	pool *pgxpool.Pool
 }
@@ -111,4 +117,39 @@ func (r *HabitRepository) MarkDone(ctx context.Context, habitID int64, date time
 		return fmt.Errorf("отметка привычки: %w", err)
 	}
 	return nil
+}
+
+func (r *HabitRepository) Stats(ctx context.Context, habitID int64) (Stats, error) {
+	// сначала убеждаемся, что привычка существует: иначе для 999 вернулись бы нули, а не 404
+	if _, err := r.GetByID(ctx, habitID); err != nil {
+		return Stats{}, err
+	}
+
+	var s Stats
+	err := r.pool.QueryRow(ctx, `
+		WITH days AS (
+			SELECT done_on,
+			       done_on - (ROW_NUMBER() OVER (ORDER BY done_on))::int AS grp
+			FROM habit_logs
+			WHERE habit_id = $1
+		),
+		streaks AS (
+			SELECT grp, count(*) AS len, max(done_on) AS last_day
+			FROM days
+			GROUP BY grp
+		)
+		SELECT
+			COALESCE(max(len), 0),
+			COALESCE((SELECT len FROM streaks
+			          WHERE last_day >= $2::date - 1
+			          ORDER BY last_day DESC LIMIT 1), 0),
+			(SELECT count(*) FROM days)
+		FROM streaks`,
+		habitID,
+		time.Now(), // "сегодня" по часовому поясу компьютера, а не по UTC базы
+	).Scan(&s.BestStreak, &s.CurrentStreak, &s.TotalDays)
+	if err != nil {
+		return Stats{}, fmt.Errorf("статистика привычки: %w", err)
+	}
+	return s, nil
 }
