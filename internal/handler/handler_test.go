@@ -18,6 +18,10 @@ type fakeStore struct {
 	createFn func(ctx context.Context, title string, description *string) (repository.Habit, error)
 }
 
+func (fakeStore) Stats(context.Context, int64) (repository.Stats, error) {
+	return repository.Stats{}, nil
+}
+
 func (f fakeStore) GetByID(ctx context.Context, id int64) (repository.Habit, error) {
 	return f.getFn(ctx, id)
 }

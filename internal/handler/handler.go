@@ -22,6 +22,7 @@ type HabitStore interface {
 	List(ctx context.Context) ([]repository.Habit, error)
 	Delete(ctx context.Context, id int64) error
 	MarkDone(ctx context.Context, habitID int64, date time.Time) error
+	Stats(ctx context.Context, habitID int64) (repository.Stats, error)
 }
 
 type Handler struct {
@@ -39,7 +40,22 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /habits/{id}", h.get)
 	mux.HandleFunc("DELETE /habits/{id}", h.delete)
 	mux.HandleFunc("POST /habits/{id}/done", h.markDone)
+	mux.HandleFunc("GET /habits/{id}/stats", h.stats)
 	return mux
+}
+
+func (h *Handler) stats(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(r)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "некорректный id")
+		return
+	}
+	s, err := h.store.Stats(r.Context(), id)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s)
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
