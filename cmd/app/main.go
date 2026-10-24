@@ -27,6 +27,10 @@ func run() error {
 		return err
 	}
 
+	if err := db.Migrate(cfg.DatabaseURL); err != nil {
+		return err
+	}
+
 	// ctx отменяется по Ctrl+C или сигналу остановки
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
