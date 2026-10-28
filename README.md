@@ -5,45 +5,34 @@
 ## Стек
 
 - Go, стандартная библиотека `net/http` (маршруты с методами, Go 1.22+)
-- PostgreSQL в Docker
+- PostgreSQL 18 в Docker
 - [pgx v5](https://github.com/jackc/pgx) и пул соединений `pgxpool`
+- [golang-migrate](https://github.com/golang-migrate/migrate) для миграций
+- Docker Compose
 
-## Запуск
+## Быстрый старт
 
-Нужны Go, Docker и Docker Compose.
+Нужны Docker и Docker Compose.
 
-1. Склонировать репозиторий:
-   ```bash
-   git clone https://github.com/ResidentAngel/go-pet-project.git
-   cd go-pet-project
-   ```
+```bash
+git clone https://github.com/ResidentAngel/go-pet-project.git
+cd go-pet-project
+cp .env.example .env     # в PowerShell: Copy-Item .env.example .env
+docker compose up -d --build
+```
 
-2. Создать файл настроек из шаблона и при желании поменять пароль:
-   ```bash
-   cp .env.example .env
-   ```
-   В PowerShell: `Copy-Item .env.example .env`
+Приложение доступно на `http://localhost:8080`. Миграции применяются автоматически при старте, ничего накатывать вручную не нужно.
 
-3. Поднять базу данных:
-   ```bash
-   docker compose up -d
-   ```
+Остановить: `docker compose down` (данные сохранятся). Остановить и удалить данные: `docker compose down -v`.
 
-4. Применить миграцию:
-   ```powershell
-   # PowerShell
-   Get-Content migrations/001_init.up.sql | docker exec -i go_pet_postgres psql -U postgres -d habit_tracker
-   ```
-   ```bash
-   # Linux / macOS
-   docker exec -i go_pet_postgres psql -U postgres -d habit_tracker < migrations/001_init.up.sql
-   ```
+### Запуск приложения без Docker
 
-5. Запустить сервер:
-   ```bash
-   go run ./cmd/app
-   ```
-   Сервер слушает `http://localhost:8080`. Остановить можно через `Ctrl+C`, он завершится корректно (graceful shutdown).
+Базу можно поднять отдельно, а приложение запустить локально (нужен Go):
+
+```bash
+docker compose up -d postgres
+go run ./cmd/app
+```
 
 ## Настройки
 
@@ -51,11 +40,11 @@
 
 | Переменная | Описание | По умолчанию |
 |---|---|---|
-| `DATABASE_URL` | строка подключения к PostgreSQL | обязательная |
+| `DATABASE_URL` | строка подключения к PostgreSQL (для запуска без Docker) | обязательная |
 | `HTTP_ADDR` | адрес HTTP-сервера | `:8080` |
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | настройки контейнера с базой | см. `.env.example` |
 
-База доступна с компьютера на порту **5433** (внутри контейнера 5432), поэтому в `DATABASE_URL` указан порт 5433.
+База доступна с компьютера на порту **5433** (внутри контейнера 5432). Внутри Docker-сети приложение подключается к хосту `postgres` на порт 5432, строка подключения собирается в `docker-compose.yml`.
 
 ## API
 
@@ -116,21 +105,43 @@ curl localhost:8080/habits/1/stats
 - `best_streak` самая длинная серия за всё время.
 - `total_days` сколько всего дней отмечено.
 
+Серии считаются одним SQL-запросом с оконной функцией `ROW_NUMBER()` (приём «gaps and islands»).
+
 ## Структура проекта
 
 ```
 cmd/app/             точка входа, сборка зависимостей, graceful shutdown
 internal/config/     загрузка настроек из .env и окружения
-internal/db/         создание пула соединений с PostgreSQL
+internal/db/         пул соединений и применение миграций
 internal/repository/ работа с БД, весь SQL
 internal/handler/    HTTP-хендлеры и тесты
-migrations/          SQL-миграции
+migrations/          SQL-миграции, вшиваются в бинарник через go:embed
+Dockerfile           сборка приложения (multi-stage)
+docker-compose.yml   PostgreSQL и приложение
 ```
 
 Хендлеры работают с хранилищем через интерфейс `HabitStore`, поэтому тестируются без базы данных.
+
+## Миграции
+
+Файлы лежат в `migrations/` в формате `NNN_имя.up.sql` и `NNN_имя.down.sql`. Приложение применяет все ещё не применённые миграции при старте, версия хранится в таблице `schema_migrations`.
+
+Чтобы изменить схему, не правьте старые файлы, а добавьте новую пару, например `002_add_archived.up.sql` и `002_add_archived.down.sql`.
 
 ## Тесты
 
 ```bash
 go test ./...
 ```
+### Интеграционные тесты
+
+Нужна отдельная тестовая база (тесты очищают таблицы):
+
+```powershell
+docker compose up -d postgres
+docker exec -it go_pet_postgres psql -U postgres -c "CREATE DATABASE habit_tracker_test;"
+$env:TEST_DATABASE_URL = "postgres://postgres:ПАРОЛЬ@127.0.0.1:5433/habit_tracker_test?sslmode=disable"
+go test -count=1 ./internal/repository
+```
+
+Без `TEST_DATABASE_URL` интеграционные тесты пропускаются.
