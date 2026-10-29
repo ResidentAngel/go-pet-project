@@ -37,13 +37,13 @@ func NewHabitRepository(pool *pgxpool.Pool) *HabitRepository {
 	return &HabitRepository{pool: pool}
 }
 
-func (r *HabitRepository) Create(ctx context.Context, title string, description *string) (Habit, error) {
+func (r *HabitRepository) Create(ctx context.Context, userID int64, title string, description *string) (Habit, error) {
 	var h Habit
 	err := r.pool.QueryRow(ctx,
-		`INSERT INTO habits (title, description)
-		 VALUES ($1, $2)
+		`INSERT INTO habits (user_id, title, description)
+		 VALUES ($1, $2, $3)
 		 RETURNING id, title, description, created_at`,
-		title, description,
+		userID, title, description,
 	).Scan(&h.ID, &h.Title, &h.Description, &h.CreatedAt)
 	if err != nil {
 		return Habit{}, fmt.Errorf("создание привычки: %w", err)
@@ -51,11 +51,11 @@ func (r *HabitRepository) Create(ctx context.Context, title string, description 
 	return h, nil
 }
 
-func (r *HabitRepository) GetByID(ctx context.Context, id int64) (Habit, error) {
+func (r *HabitRepository) GetByID(ctx context.Context, userID, id int64) (Habit, error) {
 	var h Habit
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, title, description, created_at FROM habits WHERE id = $1`,
-		id,
+		`SELECT id, title, description, created_at FROM habits WHERE id = $1 AND user_id = $2`,
+		id, userID,
 	).Scan(&h.ID, &h.Title, &h.Description, &h.CreatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -66,9 +66,10 @@ func (r *HabitRepository) GetByID(ctx context.Context, id int64) (Habit, error) 
 	return h, nil
 }
 
-func (r *HabitRepository) List(ctx context.Context) ([]Habit, error) {
+func (r *HabitRepository) List(ctx context.Context, userID int64) ([]Habit, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, title, description, created_at FROM habits ORDER BY id`)
+		`SELECT id, title, description, created_at FROM habits WHERE user_id = $1 ORDER BY id`,
+		userID)
 	if err != nil {
 		return nil, fmt.Errorf("список привычек: %w", err)
 	}
@@ -88,8 +89,8 @@ func (r *HabitRepository) List(ctx context.Context) ([]Habit, error) {
 	return habits, nil
 }
 
-func (r *HabitRepository) Delete(ctx context.Context, id int64) error {
-	tag, err := r.pool.Exec(ctx, `DELETE FROM habits WHERE id = $1`, id)
+func (r *HabitRepository) Delete(ctx context.Context, userID, id int64) error {
+	tag, err := r.pool.Exec(ctx, `DELETE FROM habits WHERE id = $1 AND user_id = $2`, id, userID)
 	if err != nil {
 		return fmt.Errorf("удаление привычки: %w", err)
 	}
@@ -99,10 +100,13 @@ func (r *HabitRepository) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (r *HabitRepository) MarkDone(ctx context.Context, habitID int64, date time.Time) error {
-	_, err := r.pool.Exec(ctx,
-		`INSERT INTO habit_logs (habit_id, done_on) VALUES ($1, $2)`,
-		habitID, date,
+// MarkDone вставляет отметку, только если привычка принадлежит пользователю.
+// Проверка владельца и вставка в одном запросе, поэтому гонки между ними нет.
+func (r *HabitRepository) MarkDone(ctx context.Context, userID, habitID int64, date time.Time) error {
+	tag, err := r.pool.Exec(ctx,
+		`INSERT INTO habit_logs (habit_id, done_on)
+		 SELECT id, $3::date FROM habits WHERE id = $1 AND user_id = $2`,
+		habitID, userID, date,
 	)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -116,12 +120,15 @@ func (r *HabitRepository) MarkDone(ctx context.Context, habitID int64, date time
 		}
 		return fmt.Errorf("отметка привычки: %w", err)
 	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound // привычки нет или она чужая
+	}
 	return nil
 }
 
-func (r *HabitRepository) Stats(ctx context.Context, habitID int64) (Stats, error) {
-	// сначала убеждаемся, что привычка существует: иначе для 999 вернулись бы нули, а не 404
-	if _, err := r.GetByID(ctx, habitID); err != nil {
+func (r *HabitRepository) Stats(ctx context.Context, userID, habitID int64) (Stats, error) {
+	// сначала убеждаемся, что привычка существует и принадлежит пользователю
+	if _, err := r.GetByID(ctx, userID, habitID); err != nil {
 		return Stats{}, err
 	}
 

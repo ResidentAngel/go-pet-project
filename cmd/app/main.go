@@ -9,11 +9,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ResidentAngel/go-pet-project/internal/auth"
 	"github.com/ResidentAngel/go-pet-project/internal/config"
 	"github.com/ResidentAngel/go-pet-project/internal/db"
 	"github.com/ResidentAngel/go-pet-project/internal/handler"
 	"github.com/ResidentAngel/go-pet-project/internal/repository"
 )
+
+const tokenTTL = 24 * time.Hour
 
 func main() {
 	if err := run(); err != nil {
@@ -44,8 +47,10 @@ func run() error {
 	}
 	defer pool.Close()
 
-	repo := repository.NewHabitRepository(pool)
-	h := handler.New(repo)
+	habits := repository.NewHabitRepository(pool)
+	users := repository.NewUserRepository(pool)
+	tokens := auth.NewTokenManager(cfg.JWTSecret, tokenTTL)
+	h := handler.New(habits, users, tokens)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
