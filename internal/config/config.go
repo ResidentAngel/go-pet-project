@@ -10,6 +10,7 @@ import (
 type Config struct {
 	DatabaseURL string
 	HTTPAddr    string
+	JWTSecret   string
 }
 
 func Load() (Config, error) {
@@ -22,12 +23,17 @@ func Load() (Config, error) {
 		return Config{}, errors.New("DATABASE_URL не задан")
 	}
 
+	secret := os.Getenv("JWT_SECRET")
+	if len(secret) < 32 {
+		return Config{}, errors.New("JWT_SECRET не задан или короче 32 символов")
+	}
+
 	addr := os.Getenv("HTTP_ADDR")
 	if addr == "" {
 		addr = ":8080"
 	}
 
-	return Config{DatabaseURL: dsn, HTTPAddr: addr}, nil
+	return Config{DatabaseURL: dsn, HTTPAddr: addr, JWTSecret: secret}, nil
 }
 
 // loadEnvFile кладёт переменные из файла в окружение.
